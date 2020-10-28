@@ -75,6 +75,42 @@ const FilterAlgorithm = enum(u8) {
     Up = 2,
     Average = 3,
     Paeth = 4,
+
+    fn reverse(this: @This(), filtered: []const u8, raw: []const u8, prior_raw: []const u8, current: usize, bpp: usize) u8 {
+        std.debug.assert(raw.len == prior_raw.len);
+        std.debug.assert(raw.len == filtered.len);
+
+        const prev_byte = if (current >= bpp) raw[current - bpp] else 0;
+        const prior_byte = prior_raw[current];
+        const prev_prior_byte = if (current >= bpp) prior_raw[current - bpp] else 0;
+
+        return switch (this) {
+            .None => filtered[current],
+            .Sub => filtered[current] +% prev_byte,
+            .Up => filtered[current] +% prior_byte,
+            .Average => filtered[current] +% ((prev_byte +% prior_byte) / 2),
+            .Paeth => filtered[current] +% paethPredictor(prev_byte, prior_byte, prev_prior_byte),
+        };
+    }
+
+    fn paethPredictor(a: u8, b: u8, c: u8) u8 {
+        const ai = @intCast(i16, a);
+        const bi = @intCast(i16, b);
+        const ci = @intCast(i16, c);
+
+        const p = ai + bi - ci;
+        const pa = std.math.absInt(p - ai) catch unreachable;
+        const pb = std.math.absInt(p - bi) catch unreachable;
+        const pc = std.math.absInt(p - ci) catch unreachable;
+
+        if (pa <= pb and pa <= pc) {
+            return a;
+        } else if (pb <= pc) {
+            return b;
+        } else {
+            return c;
+        }
+    }
 };
 
 const InterlaceMethod = enum(u8) {
@@ -207,6 +243,7 @@ pub const PNG = struct {
         var imageInfo = ImageInfo{};
         imageInfo.width = @intCast(usize, png.width());
         imageInfo.height = @intCast(usize, png.height());
+        // TODO: set the pixel format of image info
         //imageInfo.pixel_format = png.pixel_format;
         return imageInfo;
     }
@@ -266,12 +303,7 @@ pub const PNG = struct {
         std.debug.assert(self.header.compression_method == .Deflate);
         std.debug.assert(self.header.filter_method == .AdaptiveFiltering);
 
-        // TODO: support reading other pixel formats
-        std.debug.assert(pixel_format == .Rgb24);
-
         // Decompress the data; this gives us the data that has been filtered per scanline
-        std.log.warn("compressed data len: {}", .{compressedData.items.len});
-        std.log.warn("bytes: {x}", .{compressedData.items});
         var compressedDataStream = std.io.fixedBufferStream(compressedData.items);
         var zlib_stream = try std.compress.zlib.zlibStream(allocator, compressedDataStream.reader());
         defer zlib_stream.deinit();
@@ -282,31 +314,76 @@ pub const PNG = struct {
 
         const scanline_len = self.header.width * self.header.color_type.numComponents() + 1;
 
+        // Stuff we need to reverse the filtering
+        var bytes_per_pixel = try getBytesPerPixel(self.header.bit_depth, self.header.color_type);
+
+        var raw_data = try allocator.alloc(u8, scanline_len - 1);
+        defer allocator.free(raw_data);
+
+        var prior_raw_data = try allocator.alloc(u8, scanline_len - 1);
+        defer allocator.free(prior_raw_data);
+        std.mem.set(u8, prior_raw_data, 0);
+
         var line: usize = 0;
         while (line < self.header.height) : (line += 1) {
             const line_idx = scanline_len * line;
 
             const filter_algorithm = @intToEnum(FilterAlgorithm, filteredData[line_idx]);
-            std.debug.assert(filter_algorithm == .None); // TODO: take filter into account instead of assuming none
-            const scanline = filteredData[line_idx +1..];
+            const scanline = filteredData[line_idx + 1 .. line_idx + scanline_len];
+
+            for (raw_data) |*byte, idx| {
+                byte.* = filter_algorithm.reverse(scanline, raw_data, prior_raw_data, idx, bytes_per_pixel);
+            }
 
             var col: usize = 0;
             while (col < self.header.width) : (col += 1) {
-                const r = scanline[col * 3 + 0];
-                const g = scanline[col * 3 + 1];
-                const b = scanline[col * 3 + 2];
-
                 const pixel_idx = (line * self.header.width) + col;
-                pixel_storage.Rgb24[pixel_idx] = color.Rgb24.initRGB(r, g, b);
+                switch (pixel_storage) {
+                    .Rgb24 => |rgb24| {
+                        const r = raw_data[col * 3 + 0];
+                        const g = raw_data[col * 3 + 1];
+                        const b = raw_data[col * 3 + 2];
+                        rgb24[pixel_idx] = color.Rgb24.initRGB(r, g, b);
+                    },
+                    .Rgba32 => |rgb32| {
+                        const r = raw_data[col * 4 + 0];
+                        const g = raw_data[col * 4 + 1];
+                        const b = raw_data[col * 4 + 2];
+                        const a = raw_data[col * 4 + 2];
+
+                        rgb32[pixel_idx] = color.Rgba32.initRGBA(r, g, b, a);
+                    },
+                    else => {
+                        return errors.ImageError.UnsupportedPixelFormat;
+                    },
+                }
             }
+
+            // Make the current data the prior data
+            var tmp = prior_raw_data;
+            prior_raw_data = raw_data;
+            raw_data = tmp;
         }
-        
+
         pixelsOpt.* = pixel_storage;
     }
 
     fn getPixelFormat(bitDepth: u8, colorType: ColorType) !PixelFormat {
         if (bitDepth == 8 and colorType == .RGB) {
             return PixelFormat.Rgb24;
+        } else if (bitDepth == 8 and colorType == .RGBA) {
+            return PixelFormat.Rgba32;
+        } else {
+            std.log.debug("unsupported pixel format; bit depth {}, color type {}", .{ bitDepth, colorType });
+            return errors.ImageError.UnsupportedPixelFormat;
+        }
+    }
+
+    fn getBytesPerPixel(bitDepth: u8, colorType: ColorType) !usize {
+        if (bitDepth == 8 and colorType == .RGB) {
+            return 3;
+        } else if (bitDepth == 8 and colorType == .RGBA) {
+            return 4;
         } else {
             return errors.ImageError.UnsupportedPixelFormat;
         }
