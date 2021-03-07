@@ -15,6 +15,7 @@ const std = @import("std");
 const utils = @import("../utils.zig");
 const zlib = @import("../compression/zlib.zig");
 const deflate = @import("../compression/deflate.zig");
+const stream_source = @import("../stream_source.zig");
 
 const PNGMagicHeader = "\x89PNG\x0D\x0A\x1A\x0A";
 
@@ -68,8 +69,10 @@ pub const IHDR = packed struct {
     pub fn deinit(self: Self, allocator: *Allocator) void {}
 
     pub fn read(self: *Self, allocator: *Allocator, read_buffer: []u8) !bool {
-        var stream = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(read_buffer) };
-        self.* = try utils.readStructBig(stream.reader(), Self);
+        var fbs_stream: stream_source.FixedBufferStreamSource([]const u8) = undefined;
+        fbs_stream.init(read_buffer);
+        //var stream = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(read_buffer) };
+        self.* = try utils.readStructBig(fbs_stream.stream_source.reader(), Self);
         return true;
     }
 };

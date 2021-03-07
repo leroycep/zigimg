@@ -8,6 +8,8 @@ const color = @import("color.zig");
 const errors = @import("errors.zig");
 const io = std.io;
 const std = @import("std");
+const stream_source = @import("./stream_source.zig");
+const StreamSource = stream_source.StreamSource;
 
 pub const ImageFormat = enum {
     Bmp,
@@ -20,9 +22,9 @@ pub const ImageFormat = enum {
     Tga,
 };
 
-pub const ImageReader = io.StreamSource.Reader;
-pub const ImageSeekStream = io.StreamSource.SeekableStream;
-pub const ImageWriterStream = io.StreamSource.Writer;
+pub const ImageReader = StreamSource.Reader;
+pub const ImageSeekStream = StreamSource.SeekableStream;
+pub const ImageWriterStream = StreamSource.Writer;
 
 pub const ImageEncoderOptions = AllImageFormats.ImageEncoderOptions;
 
@@ -112,9 +114,11 @@ pub const Image = struct {
     pub fn fromMemory(allocator: *Allocator, buffer: []const u8) !Image {
         var result = init(allocator);
 
-        var stream_source = io.StreamSource{ .const_buffer = io.fixedBufferStream(buffer) };
+        var fbs_stream: stream_source.FixedBufferStreamSource([]const u8) = undefined;
+        fbs_stream.init(buffer);
+        //var stream_source = io.StreamSource{ .const_buffer = io.fixedBufferStream(buffer) };
 
-        try result.internalRead(allocator, stream_source.reader(), stream_source.seekableStream());
+        try result.internalRead(allocator, fbs_stream.stream_source.reader(), fbs_stream.stream_source.seekableStream());
 
         return result;
     }

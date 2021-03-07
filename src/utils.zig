@@ -2,6 +2,7 @@ const builtin = std.builtin;
 const std = @import("std");
 const io = std.io;
 const meta = std.meta;
+const image = @import("image.zig");
 
 pub fn toMagicNumberNative(magic: []const u8) u32 {
     var result: u32 = 0;
@@ -29,11 +30,11 @@ pub const toMagicNumberLittle = switch (builtin.endian) {
     builtin.Endian.Big => toMagicNumberForeign,
 };
 
-pub fn readStructNative(reader: io.StreamSource.Reader, comptime T: type) !T {
+pub fn readStructNative(reader: image.ImageReader, comptime T: type) !T {
     return try reader.readStruct(T);
 }
 
-pub fn readStructForeign(reader: io.StreamSource.Reader, comptime T: type) !T {
+pub fn readStructForeign(reader: image.ImageReader, comptime T: type) !T {
     comptime std.debug.assert(@typeInfo(T).Struct.layout != builtin.TypeInfo.ContainerLayout.Auto);
 
     var result: T = undefined;
@@ -53,7 +54,8 @@ pub fn readStructForeign(reader: io.StreamSource.Reader, comptime T: type) !T {
                 });
             },
             else => {
-                std.debug.panic("Add support for type {} in readStructForeign", .{@typeName(entry.field_type)});
+                unreachable;
+                //@panic("Add support for type {} in readStructForeign");//, .{@typeName(entry.field_type)});
             },
         }
     }
