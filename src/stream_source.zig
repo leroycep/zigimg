@@ -22,7 +22,7 @@ pub const StreamSource = struct {
     pub const ReadError = std.fs.File.ReadError;
     pub const WriteError = std.fs.File.WriteError;
     pub const SeekError = std.fs.File.SeekError;
-    pub const GetSeekPosError = std.fs.File.GetPosError;
+    pub const GetSeekPosError = std.fs.File.GetSeekPosError;
 
     pub const Reader = io.Reader(*StreamSource, ReadError, read);
     pub const Writer = io.Writer(*StreamSource, WriteError, write);
